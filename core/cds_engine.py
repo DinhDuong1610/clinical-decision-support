@@ -1,8 +1,11 @@
 import redis
 import json
-from itertools import combinations, product
 import psycopg2
 import threading
+from itertools import combinations, product
+import joblib
+import os
+import pandas as pd
 
 ALERT_TYPE_DDI = "DDI"
 ALERT_TYPE_DDXI = "DDxI"
@@ -16,27 +19,92 @@ SEVERITY_MODERATE = "Moderate"
 SEVERITY_UNKNOWN = "Unknown"
 
 class CDSEngine:
-    def __init__(self, redis_config, postgres_config):
+    def __init__(self, redis_config, postgres_config, models_path):
         try:
             self.redis_conn = redis.Redis(**redis_config, decode_responses=True)
             self.redis_conn.ping()
-            print("CDSEngine: Kết nối Redis thành công!")
+            print("DSEngine: Kết nối Redis thành công!")
         except redis.exceptions.ConnectionError as e:
             print(f"CDSEngine: Lỗi kết nối Redis: {e}")
             raise
-
         self.postgres_config = postgres_config
 
+        self.ml_enabled = self._load_ml_models(models_path)
+        if self.ml_enabled:
+            print("CDSEngine: Tải mô hình ML thành công! Bộ lọc thông minh đã được kích hoạt.")
+        else:
+            print("CDSEngine: Không thể tải mô hình ML. Hệ thống sẽ hoạt động ở chế độ chỉ dựa trên luật.")
+
+    def _load_ml_models(self, models_path):
+        try:
+            self.mlb_atc = joblib.load(os.path.join(models_path, 'mlb_atc.joblib'))
+            self.mlb_icd = joblib.load(os.path.join(models_path, 'mlb_icd.joblib'))
+            self.column_transformer = joblib.load(os.path.join(models_path, 'column_transformer.joblib'))
+            self.model = joblib.load(os.path.join(models_path, 'xgb_model_tuned.joblib'))
+
+            self.feature_names = joblib.load(os.path.join(models_path, 'feature_names.joblib'))
+
+            return True
+        except FileNotFoundError as e:
+            print(f"Lỗi: Không tìm thấy file mô hình. {e}")
+            return False
+
     def check_prescription(self, patient_profile, prescription):
+        raw_alerts = self._get_raw_alerts(patient_profile, prescription)
+        if self.ml_enabled:
+            filtered_alerts = self._filter_alerts_with_ml(raw_alerts, patient_profile, prescription)
+            return raw_alerts, filtered_alerts
+        return raw_alerts, raw_alerts
+
+    def _get_raw_alerts(self, patient_profile, prescription):
         alerts = []
         new_prescription_atcs = {drug['atc_code'] for drug in prescription}
         existing_meds_atcs = set(patient_profile.get('existing_medications', []))
-
         alerts.extend(self._check_allergies(new_prescription_atcs, patient_profile.get('allergies', [])))
         alerts.extend(self._check_ddxi(new_prescription_atcs, patient_profile.get('chronic_diseases', [])))
         alerts.extend(self._check_ddi(new_prescription_atcs, existing_meds_atcs))
         alerts.extend(self._check_dose(prescription, patient_profile))
         return alerts
+
+    def _filter_alerts_with_ml(self, raw_alerts, patient_profile, prescription):
+        final_alerts = []
+        context_df = self._prepare_inference_data(patient_profile, prescription)
+        for alert in raw_alerts:
+            if alert['severity'] in [SEVERITY_MAJOR, SEVERITY_ABSOLUTE]:
+                final_alerts.append(alert)
+                continue
+
+            inference_df = context_df.copy()
+            inference_df['alert_type'] = alert['type']
+            inference_df['severity'] = alert['severity']
+
+            feature_vector = self._transform_single_case(inference_df)
+            probability_useful = self.model.predict_proba(feature_vector)[0][1]
+
+            threshold = 0.5
+            if alert['severity'] in ["Moderate", "Relative"]:
+                threshold = 0.4
+
+            if probability_useful >= threshold:
+                alert['ml_score'] = round(probability_useful, 2)
+                final_alerts.append(alert)
+        return final_alerts
+
+    def _prepare_inference_data(self, patient_profile, prescription):
+        atc_list = [drug['atc_code'] for drug in prescription]
+        data = {'list_atc': [atc_list], 'icd_list': [patient_profile.get('chronic_diseases', [])],
+                'patient_age': patient_profile.get('age'), 'patient_gender': patient_profile.get('gender')}
+        return pd.DataFrame(data)
+
+    def _transform_single_case(self, df):
+        atc_features = self.mlb_atc.transform(df['list_atc'])
+        atc_df = pd.DataFrame(atc_features, columns=[f"atc_{c}" for c in self.mlb_atc.classes_])
+        icd_features = self.mlb_icd.transform(df['icd_list'])
+        icd_df = pd.DataFrame(icd_features, columns=[f"icd_{c}" for c in self.mlb_icd.classes_])
+        processed_features = self.column_transformer.transform(df)
+        processed_df = pd.DataFrame(processed_features, columns=self.column_transformer.get_feature_names_out())
+        combined_df = pd.concat([processed_df, atc_df, icd_df], axis=1)
+        return combined_df.reindex(columns=self.feature_names, fill_value=0)
 
     def log_event_async(self, log_data):
         log_thread = threading.Thread(target=self._write_log_to_db, args=(log_data,))

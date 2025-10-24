@@ -69,8 +69,10 @@ class DataPreparator:
 
         final_df = pd.concat([processed_df, atc_df, icd_df], axis=1)
 
-        print(f"Biến đổi hoàn tất. Tổng số features: {final_df.shape[1]}")
+        feature_names = final_df.columns.tolist()
+        joblib.dump(feature_names, os.path.join(models_path, 'feature_names.joblib'))
 
+        print(f"Biến đổi hoàn tất. Tổng số features: {final_df.shape[1]}")
         return final_df, df['label']
 
     def load_data(self, X, y, parquet_path, csv_path):
@@ -88,7 +90,7 @@ class DataPreparator:
 
     def run(self, models_path, parquet_path, csv_path):
         raw_data = self.extract_data()
-        X, y = self.fit_and_transform(raw_data, models_path)  # <-- THAY ĐỔI Ở ĐÂY
+        X, y = self.fit_and_transform(raw_data, models_path)
         self.load_data(X, y, parquet_path, csv_path)
 
 

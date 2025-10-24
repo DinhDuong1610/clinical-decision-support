@@ -128,3 +128,6 @@ data/
 
 # Model files
 models/
+
+# Reports and figures
+reports/
