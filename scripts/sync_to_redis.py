@@ -45,7 +45,6 @@ def sync_dose_rules(pg_cursor, redis_pipe):
     rules_by_drug = defaultdict(list)
     for row in pg_cursor.fetchall():
         drug_atc, pop, route, d_min, d_max, unit, note = row
-        # Chuyển đổi Decimal sang float nếu cần
         dose_min = float(d_min) if d_min is not None else None
         dose_max = float(d_max) if d_max is not None else None
 
@@ -64,7 +63,7 @@ def main():
         pg_cursor = pg_conn.cursor()
 
         redis_conn = redis.Redis(**REDIS_CONFIG, decode_responses=True)
-        redis_conn.ping() # Kiểm tra kết nối
+        redis_conn.ping()
 
         redis_conn.flushdb()
 
