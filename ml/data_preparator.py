@@ -37,8 +37,10 @@ class DataPreparator:
 
         os.makedirs(models_path, exist_ok=True)
 
-        df['label'] = ((df['doctor_action'] == 'accepted') |
-                       (df['final_rx_outcome'].isin(['changed', 'removed']))).astype(int)
+        df['label'] = (df['doctor_action'] == 'CANCEL').astype(int)
+
+        label_counts = df['label'].value_counts()
+        print(f"   -> Phân phối nhãn (0/1): \n{label_counts}")
 
         mlb_atc = MultiLabelBinarizer()
         atc_features = mlb_atc.fit_transform(df['list_atc'])

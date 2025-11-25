@@ -76,8 +76,13 @@ class ModelTrainer:
 
         if os.path.exists(self.champion_model_path):
             print(f"\nTải mô hình Champion hiện tại từ: {self.champion_model_path}")
-            champion_model = joblib.load(self.champion_model_path)
-            champion_score, _ = self._evaluate_model(champion_model, X_test, y_test, "Champion (Mô hình cũ)")
+            try:
+                champion_model = joblib.load(self.champion_model_path)
+                champion_score, _ = self._evaluate_model(champion_model, X_test, y_test, "Champion (Mô hình cũ)")
+            except Exception as e:
+                print(f"CẢNH BÁO: Mô hình cũ không tương thích với dữ liệu mới ({str(e)[:100]}...).")
+                print("-> Coi như Champion hiện tại không hợp lệ.")
+                champion_score = -1.0
         else:
             print("\nKhông tìm thấy mô hình Champion. Mô hình mới sẽ tự động trở thành Champion.")
             champion_score = -1.0
